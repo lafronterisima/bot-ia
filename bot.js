@@ -1,132 +1,129 @@
-require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const TelegramBot = require('node-telegram-bot-api');
+const { Telegraf } = require('telegraf');
 const { OpenAI } = require('openai');
+const axios = require('axios');
 const googleTTS = require('google-tts-api');
 
-// Configuración de APIs
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+// Configuración de clientes
+const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Historial conversacional en memoria
+// Historial conversacional en memoria (Nota: En serverless, se reinicia con inactividad)
 const historialChat = {};
 
-// Personalidad de la amiga virtual
 const SYSTEM_PROMPT = {
-    role: "system",
-    content: "Eres Maya, una amiga virtual cercana, empática, divertida y atenta. " +
-             "Hablas en español de forma natural e informal. Usas emojis ocasionalmente. " +
-             "Tus respuestas son breves y fluidas (máximo 2 a 3 frases)."
+  role: "system",
+  content: "Eres Maya, una amiga virtual cercana, empática, divertida y atenta. " +
+           "Hablas en español de forma natural e informal. Usas emojis ocasionalmente. " +
+           "Tus respuestas son breves y fluidas (máximo 2 a 3 frases)."
 };
 
-// Función para convertir texto a voz (Audio MP3)
-async function textoAVoz(texto, archivoDestino) {
-    const urls = googleTTS.getAllAudioUrls(texto, {
-        lang: 'es',
-        slow: false,
-        host: 'https://translate.google.com',
-    });
-    const buffers = [];
-    for (const item of urls) {
-        const res = await axios({ url: item.url, method: 'GET', responseType: 'arraybuffer' });
-        buffers.push(res.data);
-    }
-    fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+// Función para convertir texto a voz devolviendo un Buffer (Sin guardar en disco)
+async function textoAVozBuffer(texto) {
+  const urls = googleTTS.getAllAudioUrls(texto, {
+    lang: 'es',
+    slow: false,
+    host: 'https://translate.google.com',
+  });
+  const buffers = [];
+  for (const item of urls) {
+    const res = await axios({ url: item.url, method: 'GET', responseType: 'arraybuffer' });
+    buffers.push(Buffer.from(res.data));
+  }
+  return Buffer.concat(buffers);
 }
 
-// 1. Manejo del comando /start
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    historialChat[chatId] = [SYSTEM_PROMPT];
-    bot.sendMessage(chatId, "¡Hola! 👋 Soy Maya, tu nueva amiga virtual. ¿Cómo estás hoy? ¡Cuéntame de ti!");
+// 1. Comando /start
+bot.start((ctx) => {
+  const chatId = ctx.chat.id;
+  historialChat[chatId] = [SYSTEM_PROMPT];
+  return ctx.reply("¡Hola! 👋 Soy Maya, tu nueva amiga virtual. ¿Cómo estás hoy? ¡Cuéntame de ti!");
 });
 
-// 2. Manejo de mensajes de TEXTO
-bot.on('text', async (msg) => {
-    if (msg.text.startsWith('/')) return;
+// 2. Mensajes de TEXTO
+bot.on('text', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const texto = ctx.message.text;
 
-    const chatId = msg.chat.id;
-    if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
+  if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
+  historialChat[chatId].push({ role: "user", content: texto });
 
-    // Añadir mensaje del usuario al historial
-    historialChat[chatId].push({ role: "user", content: msg.text });
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: historialChat[chatId],
+      max_tokens: 200
+    });
 
-    try {
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: historialChat[chatId],
-            max_tokens: 200
-        });
+    const respuestaTexto = completion.choices[0].message.content;
+    historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
-        const respuestaTexto = completion.choices[0].message.content;
-        historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
+    await ctx.reply(respuestaTexto);
+  } catch (error) {
+    console.error("Error procesando texto:", error.message);
+    await ctx.reply("¡Uy! Me distraje un segundo. ¿Me repites?");
+  }
+});
 
-        await bot.sendMessage(chatId, respuestaTexto);
+// 3. NOTAS DE VOZ (Handled con Buffers en memoria)
+bot.on('voice', async (ctx) => {
+  const chatId = ctx.chat.id;
+  if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
 
-    } catch (error) {
-        console.error("Error al procesar texto:", error.message);
-        bot.sendMessage(chatId, "¡Uy! Me distraje un segundo. ¿Me repites?");
+  try {
+    await ctx.sendChatAction('record_voice');
+
+    // Obtener la URL del archivo de voz desde Telegram
+    const fileId = ctx.message.voice.file_id;
+    const fileUrl = await ctx.telegram.getFileLink(fileId);
+
+    // Descargar el audio en un Buffer de memoria
+    const responseAudio = await axios({ url: fileUrl.href, method: 'GET', responseType: 'arraybuffer' });
+    const audioBuffer = Buffer.from(responseAudio.data);
+
+    // Enviar el buffer directamente a Whisper usando un pseudo-archivo
+    const file = await OpenAI.toFile(audioBuffer, 'voice.ogg', { type: 'audio/ogg' });
+    const transcription = await openai.audio.transcriptions.create({
+      file: file,
+      model: "whisper-1",
+      language: "es"
+    });
+
+    const textoUsuario = transcription.text;
+    historialChat[chatId].push({ role: "user", content: textoUsuario });
+
+    // Respuesta de GPT
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: historialChat[chatId],
+      max_tokens: 150
+    });
+
+    const respuestaTexto = completion.choices[0].message.content;
+    historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
+
+    // Generar voz a partir del texto y enviarlo a Telegram como Buffer
+    const mp3Buffer = await textoAVozBuffer(respuestaTexto);
+    await ctx.replyWithVoice(
+      { source: mp3Buffer, filename: 'respuesta.mp3' },
+      { caption: `🎙️ Maya: "${respuestaTexto}"` }
+    );
+
+  } catch (err) {
+    console.error("Error en nota de voz:", err);
+    await ctx.reply("No alcancé a escucharte bien, ¿me hablas de nuevo?");
+  }
+});
+
+// Handler exportado para la función Serverless de Vercel
+module.exports = async (req, res) => {
+  try {
+    if (req.method === 'POST') {
+      await bot.handleUpdate(req.body, res);
+    } else {
+      res.status(200).send('Maya está activa en Vercel.');
     }
-});
-
-// 3. Manejo de NOTAS DE VOZ
-bot.on('voice', async (msg) => {
-    const chatId = msg.chat.id;
-    if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
-
-    const tempOgg = path.join(__dirname, `voice_${Date.now()}.ogg`);
-    const tempMp3 = path.join(__dirname, `res_${Date.now()}.mp3`);
-
-    try {
-        bot.sendChatAction(chatId, 'record_voice');
-
-        // Descargar el audio del usuario desde Telegram
-        const fileUrl = await bot.getFileLink(msg.voice.file_id);
-        const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
-        const writer = fs.createWriteStream(tempOgg);
-        response.data.pipe(writer);
-
-        writer.on('finish', async () => {
-            try {
-                // Transcribir audio a texto usando Whisper
-                const transcription = await openai.audio.transcriptions.create({
-                    file: fs.createReadStream(tempOgg),
-                    model: "whisper-1",
-                    language: "es"
-                });
-
-                const textoUsuario = transcription.text;
-                historialChat[chatId].push({ role: "user", content: textoUsuario });
-
-                // Generar respuesta con la IA
-                const completion = await openai.chat.completions.create({
-                    model: "gpt-4o-mini",
-                    messages: historialChat[chatId],
-                    max_tokens: 150
-                });
-
-                const respuestaTexto = completion.choices[0].message.content;
-                historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
-
-                // Convertir respuesta a voz y enviar nota de voz
-                await textoAVoz(respuestaTexto, tempMp3);
-                await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
-
-            } catch (err) {
-                console.error("Error procesando nota de voz:", err.message);
-                bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
-            } finally {
-                // Limpieza de archivos temporales
-                if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
-                if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
-            }
-        });
-
-    } catch (e) {
-        console.error("Error general voz:", e.message);
-    }
-});
-
-console.log("🤖 Amiga Virtual activa en Telegram...");
+  } catch (error) {
+    console.error('Error en Webhook:', error);
+    res.status(500).send('Error interno');
+  }
+};
