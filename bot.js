@@ -1,53 +1,132 @@
-const { Telegraf } = require('telegraf');
-const OpenAI = require('openai');
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const TelegramBot = require('node-telegram-bot-api');
+const { OpenAI } = require('openai');
+const googleTTS = require('google-tts-api');
 
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+// Configuración de APIs
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Almacenamiento temporal de historial por usuario
-const chatHistories = {};
+// Historial conversacional en memoria
+const historialChat = {};
 
+// Personalidad de la amiga virtual
 const SYSTEM_PROMPT = {
-  role: 'system',
-  content: 'Eres Valeria, una amiga virtual empática, divertida y cercana. Hablas en español informal y natural.'
+    role: "system",
+    content: "Eres Maya, una amiga virtual cercana, empática, divertida y atenta. " +
+             "Hablas en español de forma natural e informal. Usas emojis ocasionalmente. " +
+             "Tus respuestas son breves y fluidas (máximo 2 a 3 frases)."
 };
 
-bot.on('text', async (ctx) => {
-  const userId = ctx.from.id;
-  const userMessage = ctx.message.text;
-
-  // Inicializar historial si no existe
-  if (!chatHistories[userId]) {
-    chatHistories[userId] = [SYSTEM_PROMPT];
-  }
-
-  // Agregar mensaje del usuario
-  chatHistories[userId].push({ role: 'user', content: userMessage });
-
-  // Mantener el historial manejable (últimos 15 mensajes)
-  if (chatHistories[userId].length > 16) {
-    chatHistories[userId] = [SYSTEM_PROMPT, ...chatHistories[userId].slice(-15)];
-  }
-
-  try {
-    // Generar respuesta con la IA
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: chatHistories[userId],
-      temperature: 0.8, // Mayor creatividad/naturalidad
+// Función para convertir texto a voz (Audio MP3)
+async function textoAVoz(texto, archivoDestino) {
+    const urls = googleTTS.getAllAudioUrls(texto, {
+        lang: 'es',
+        slow: false,
+        host: 'https://translate.google.com',
     });
+    const buffers = [];
+    for (const item of urls) {
+        const res = await axios({ url: item.url, method: 'GET', responseType: 'arraybuffer' });
+        buffers.push(res.data);
+    }
+    fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+}
 
-    const botResponse = completion.choices[0].message.content;
-
-    // Guardar respuesta del bot en el historial
-    chatHistories[userId].push({ role: 'assistant', content: botResponse });
-
-    // Responder en Telegram
-    await ctx.reply(botResponse);
-  } catch (error) {
-    console.error('Error al generar respuesta:', error);
-    await ctx.reply('Uy, me distraje un segundo... ¿me repites?');
-  }
+// 1. Manejo del comando /start
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
+    historialChat[chatId] = [SYSTEM_PROMPT];
+    bot.sendMessage(chatId, "¡Hola! 👋 Soy Maya, tu nueva amiga virtual. ¿Cómo estás hoy? ¡Cuéntame de ti!");
 });
 
-bot.launch();
+// 2. Manejo de mensajes de TEXTO
+bot.on('text', async (msg) => {
+    if (msg.text.startsWith('/')) return;
+
+    const chatId = msg.chat.id;
+    if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
+
+    // Añadir mensaje del usuario al historial
+    historialChat[chatId].push({ role: "user", content: msg.text });
+
+    try {
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: historialChat[chatId],
+            max_tokens: 200
+        });
+
+        const respuestaTexto = completion.choices[0].message.content;
+        historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
+
+        await bot.sendMessage(chatId, respuestaTexto);
+
+    } catch (error) {
+        console.error("Error al procesar texto:", error.message);
+        bot.sendMessage(chatId, "¡Uy! Me distraje un segundo. ¿Me repites?");
+    }
+});
+
+// 3. Manejo de NOTAS DE VOZ
+bot.on('voice', async (msg) => {
+    const chatId = msg.chat.id;
+    if (!historialChat[chatId]) historialChat[chatId] = [SYSTEM_PROMPT];
+
+    const tempOgg = path.join(__dirname, `voice_${Date.now()}.ogg`);
+    const tempMp3 = path.join(__dirname, `res_${Date.now()}.mp3`);
+
+    try {
+        bot.sendChatAction(chatId, 'record_voice');
+
+        // Descargar el audio del usuario desde Telegram
+        const fileUrl = await bot.getFileLink(msg.voice.file_id);
+        const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
+        const writer = fs.createWriteStream(tempOgg);
+        response.data.pipe(writer);
+
+        writer.on('finish', async () => {
+            try {
+                // Transcribir audio a texto usando Whisper
+                const transcription = await openai.audio.transcriptions.create({
+                    file: fs.createReadStream(tempOgg),
+                    model: "whisper-1",
+                    language: "es"
+                });
+
+                const textoUsuario = transcription.text;
+                historialChat[chatId].push({ role: "user", content: textoUsuario });
+
+                // Generar respuesta con la IA
+                const completion = await openai.chat.completions.create({
+                    model: "gpt-4o-mini",
+                    messages: historialChat[chatId],
+                    max_tokens: 150
+                });
+
+                const respuestaTexto = completion.choices[0].message.content;
+                historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
+
+                // Convertir respuesta a voz y enviar nota de voz
+                await textoAVoz(respuestaTexto, tempMp3);
+                await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
+
+            } catch (err) {
+                console.error("Error procesando nota de voz:", err.message);
+                bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
+            } finally {
+                // Limpieza de archivos temporales
+                if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
+                if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
+            }
+        });
+
+    } catch (e) {
+        console.error("Error general voz:", e.message);
+    }
+});
+
+console.log("🤖 Amiga Virtual activa en Telegram...");
