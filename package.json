@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node Api/index.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
