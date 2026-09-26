@@ -142,4 +142,17 @@ bot.on('voice', async (msg) => {
     }
 });
 
+// --- SERVIDOR HTTP PARA HEALTH CHECKS (Añadir al final) ---
+const PORT = process.env.PORT || 8080;
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot de Telegram Maya está activo y saludable 🚀\n');
+});
+
+// Importante: Vincular a '0.0.0.0' para que el proxy del servidor lo detecte
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🤖 Servidor HTTP de salud escuchando en el puerto ${PORT}`);
+});
+
 console.log("🤖 Amiga Virtual activa en Telegram...");
