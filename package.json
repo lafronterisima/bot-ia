@@ -2,9 +2,9 @@
   "name": "bot-telegram-maya",
   "version": "1.0.0",
   "description": "Bot de Telegram",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
