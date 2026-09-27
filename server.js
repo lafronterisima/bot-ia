@@ -102,31 +102,22 @@ bot.on('text', async (msg) => {
   }
 });
 
-// 3. Notas de Voz
+// 3. Notas de Voz (Corregido con descarga nativa de Telegram)
 bot.on('voice', async (msg) => {
   const chatId = msg.chat.id;
   const timeStamp = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-  const tempOgg = path.join(__dirname, `voice_${timeStamp}.ogg`);
   const tempMp3 = path.join(__dirname, `res_${timeStamp}.mp3`);
+  let downloadedFilePath = null;
 
   try {
     await bot.sendChatAction(chatId, 'record_voice');
 
-    // 1. Descargar el archivo OGG enviado por Telegram
-    const fileUrl = await bot.getFileLink(msg.voice.file_id);
-    const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
+    // 1. Descarga nativa y directa desde node-telegram-bot-api (evita fallos de axios/stream)
+    downloadedFilePath = await bot.downloadFile(msg.voice.file_id, __dirname);
 
-    const writer = fs.createWriteStream(tempOgg);
-    response.data.pipe(writer);
-
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-
-    // 2. Transcribir el audio usando Whisper
+    // 2. Transcribir audio directamente desde el archivo descargado usando OpenAI Whisper
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempOgg),
+      file: fs.createReadStream(downloadedFilePath),
       model: "whisper-1",
       language: "es"
     });
@@ -152,16 +143,20 @@ bot.on('voice', async (msg) => {
     historialChat[chatId].push({ role: "user", content: textoUsuario });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
-    // 4. Convertir la respuesta a audio y enviar
+    // 4. Convertir respuesta a voz y enviarla
     await textoAVoz(respuestaTexto, tempMp3);
     await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
 
   } catch (err) {
-    console.error("❌ Error procesando nota de voz:", err.message || err);
+    console.error("❌ ERROR DETALLADO PROCESANDO NOTA DE VOZ:", err.stack || err.message || err);
+    if (err.response && err.response.data) {
+      console.error("Detalles de respuesta HTTP:", err.response.data);
+    }
     bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
   } finally {
+    // Limpieza de archivos temporales de audio
     try {
-      if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
+      if (downloadedFilePath && fs.existsSync(downloadedFilePath)) fs.unlinkSync(downloadedFilePath);
       if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
     } catch (cleanupError) {
       console.error("Error al eliminar archivos temporales:", cleanupError.message);
@@ -176,14 +171,12 @@ bot.on('photo', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'typing');
 
-    // Tomar la versión de mayor resolución de la foto
     const photo = msg.photo[msg.photo.length - 1];
     const fileUrl = await bot.getFileLink(photo.file_id);
 
     const caption = msg.caption || "¿Qué opinas de esta foto?";
     const historialCompleto = obtenerHistorial(chatId);
 
-    // Formato Multimodal para visión en GPT-4o-mini
     const mensajeImagen = {
       role: "user",
       content: [
