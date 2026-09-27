@@ -36,17 +36,14 @@ function obtenerHistorial(chatId) {
   if (historialChat[chatId].length > MAX_HISTORIAL_MENSAJES) {
     historialChat[chatId] = historialChat[chatId].slice(-MAX_HISTORIAL_MENSAJES);
   }
-  // Retorna el System Prompt seguido de la copia del historial actual
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
-// FUNCIÓN textoAVoz CON INDICACIONES INTEGRADAS
+// FUNCIÓN DE TEXTO A VOZ (TTS)
 async function textoAVoz(texto, archivoDestino) {
-  // 1. Limpieza y validación del texto recibido
   const textoLimpio = String(texto || '').trim();
   if (!textoLimpio) throw new Error("El texto introducido para TTS está vacío.");
 
-  // 2. Obtención segura de las URLs divididas
   const urls = googleTTS.getAllAudioUrls(textoLimpio, {
     lang: 'es',
     slow: false,
@@ -58,7 +55,6 @@ async function textoAVoz(texto, archivoDestino) {
     throw new Error("No se pudieron generar los fragmentos de audio con google-tts-api.");
   }
 
-  // 3. Descarga de los buffers en paralelo
   const buffers = await Promise.all(
     urls.map(async (item) => {
       const targetUrl = typeof item === 'string' ? item : item.url;
@@ -67,7 +63,6 @@ async function textoAVoz(texto, archivoDestino) {
     })
   );
 
-  // 4. Escritura en disco
   fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
 }
 
@@ -84,8 +79,6 @@ bot.on('text', async (msg) => {
 
   const chatId = msg.chat.id;
   const historialCompleto = obtenerHistorial(chatId);
-  
-  // Agregar el mensaje actual del usuario al contexto que irá a OpenAI
   const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: msg.text }];
 
   try {
@@ -97,7 +90,6 @@ bot.on('text', async (msg) => {
 
     const respuestaTexto = completion.choices[0].message.content;
 
-    // Guardar permanentemente en el historial de memoria
     if (!historialChat[chatId]) historialChat[chatId] = [];
     historialChat[chatId].push({ role: "user", content: msg.text });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
@@ -120,7 +112,7 @@ bot.on('voice', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'record_voice');
 
-    // 1. Descargar audio de Telegram asegurando que se complete la escritura
+    // 1. Descargar el archivo OGG enviado por Telegram
     const fileUrl = await bot.getFileLink(msg.voice.file_id);
     const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
 
@@ -132,7 +124,7 @@ bot.on('voice', async (msg) => {
       writer.on('error', reject);
     });
 
-    // 2. Transcribir audio con OpenAI Whisper
+    // 2. Transcribir el audio usando Whisper
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempOgg),
       model: "whisper-1",
@@ -144,7 +136,7 @@ bot.on('voice', async (msg) => {
       return bot.sendMessage(chatId, "No logré escuchar nada en la nota de voz 😅");
     }
 
-    // 3. Generar respuesta de texto con ChatGPT
+    // 3. Procesar el texto transcrito con OpenAI
     const historialCompleto = obtenerHistorial(chatId);
     const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: textoUsuario }];
 
@@ -156,29 +148,67 @@ bot.on('voice', async (msg) => {
 
     const respuestaTexto = completion.choices[0].message.content;
 
-    // Guardar conversación en el historial
     if (!historialChat[chatId]) historialChat[chatId] = [];
     historialChat[chatId].push({ role: "user", content: textoUsuario });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
-    // 4. Convertir texto a voz y enviar por Telegram
+    // 4. Convertir la respuesta a audio y enviar
     await textoAVoz(respuestaTexto, tempMp3);
     await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
 
   } catch (err) {
     console.error("❌ Error procesando nota de voz:", err.message || err);
-    if (err.response) {
-      console.error("Detalles de la respuesta de error:", err.response.data);
-    }
     bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
   } finally {
-    // Limpieza segura de archivos temporales
     try {
       if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
       if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
     } catch (cleanupError) {
       console.error("Error al eliminar archivos temporales:", cleanupError.message);
     }
+  }
+});
+
+// 4. Procesamiento de Fotos / Imágenes
+bot.on('photo', async (msg) => {
+  const chatId = msg.chat.id;
+
+  try {
+    await bot.sendChatAction(chatId, 'typing');
+
+    // Tomar la versión de mayor resolución de la foto
+    const photo = msg.photo[msg.photo.length - 1];
+    const fileUrl = await bot.getFileLink(photo.file_id);
+
+    const caption = msg.caption || "¿Qué opinas de esta foto?";
+    const historialCompleto = obtenerHistorial(chatId);
+
+    // Formato Multimodal para visión en GPT-4o-mini
+    const mensajeImagen = {
+      role: "user",
+      content: [
+        { type: "text", text: caption },
+        { type: "image_url", image_url: { url: fileUrl } }
+      ]
+    };
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [...historialCompleto, mensajeImagen],
+      max_tokens: 200
+    });
+
+    const respuestaTexto = completion.choices[0].message.content;
+
+    if (!historialChat[chatId]) historialChat[chatId] = [];
+    historialChat[chatId].push({ role: "user", content: `[Envía una foto con comentario: "${caption}"]` });
+    historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
+
+    await bot.sendMessage(chatId, respuestaTexto);
+
+  } catch (error) {
+    console.error("Error al procesar la imagen:", error.message || error);
+    bot.sendMessage(chatId, "¡Uy! No pude ver bien la foto, ¿me la envías otra vez?");
   }
 });
 
