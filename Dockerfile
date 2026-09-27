@@ -6,7 +6,7 @@ WORKDIR /workspace
 COPY package*.json ./
 
 # Instalar dependencias omitiendo paquetes opcionales
-RUN npm install --omit=optional
+RUN npm install 
 
 # Copiar el resto de archivos de la aplicación
 COPY . .
