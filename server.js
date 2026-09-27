@@ -39,31 +39,53 @@ function obtenerHistorial(chatId) {
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
-// FUNCIÓN DE TEXTO A VOZ (TTS)
+// FUNCIÓN DE TEXTO A VOZ ROBUSTA (Con Fallback a OpenAI TTS)
 async function textoAVoz(texto, archivoDestino) {
   const textoLimpio = String(texto || '').trim();
   if (!textoLimpio) throw new Error("El texto introducido para TTS está vacío.");
 
-  const urls = googleTTS.getAllAudioUrls(textoLimpio, {
-    lang: 'es',
-    slow: false,
-    host: 'https://translate.google.com',
-    timeout: 10000,
-  });
+  try {
+    // Intento 1: Usar google-tts-api formateando correctamente la respuesta
+    const urlsResult = googleTTS.getAllAudioUrls(textoLimpio, {
+      lang: 'es',
+      slow: false,
+      host: 'https://translate.google.com',
+      timeout: 10000,
+    });
 
-  if (!Array.isArray(urls) || urls.length === 0) {
-    throw new Error("No se pudieron generar los fragmentos de audio con google-tts-api.");
+    // Asegurar que urlsResult sea siempre un Array de cadenas de texto (URLs)
+    let urlList = [];
+    if (Array.isArray(urlsResult)) {
+      urlList = urlsResult.map(item => (typeof item === 'string' ? item : item.url));
+    } else if (typeof urlsResult === 'string') {
+      urlList = [urlsResult];
+    } else if (urlsResult && urlsResult.url) {
+      urlList = [urlsResult.url];
+    }
+
+    if (urlList.length > 0) {
+      const buffers = await Promise.all(
+        urlList.map(async (targetUrl) => {
+          const res = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+          return res.data;
+        })
+      );
+      fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+      return;
+    }
+  } catch (gError) {
+    console.warn("⚠️ Falló Google TTS, recurriendo a OpenAI TTS:", gError.message);
   }
 
-  const buffers = await Promise.all(
-    urls.map(async (item) => {
-      const targetUrl = typeof item === 'string' ? item : item.url;
-      const res = await axios.get(targetUrl, { responseType: 'arraybuffer' });
-      return res.data;
-    })
-  );
+  // Intento 2 (Fallback): Generación de voz oficial mediante OpenAI TTS
+  const mp3Response = await openai.audio.speech.create({
+    model: "tts-1",
+    voice: "nova", // Voz femenina y expresiva
+    input: textoLimpio,
+  });
 
-  fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+  const buffer = Buffer.from(await mp3Response.arrayBuffer());
+  fs.writeFileSync(archivoDestino, buffer);
 }
 
 // 1. Comando /start
@@ -102,7 +124,7 @@ bot.on('text', async (msg) => {
   }
 });
 
-// 3. Notas de Voz (Corregido con descarga nativa de Telegram)
+// 3. Notas de Voz
 bot.on('voice', async (msg) => {
   const chatId = msg.chat.id;
   const timeStamp = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -112,7 +134,7 @@ bot.on('voice', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'record_voice');
 
-    // 1. Descarga nativa y directa desde node-telegram-bot-api (evita fallos de axios/stream)
+    // 1. Descarga nativa y directa desde node-telegram-bot-api
     downloadedFilePath = await bot.downloadFile(msg.voice.file_id, __dirname);
 
     // 2. Transcribir audio directamente desde el archivo descargado usando OpenAI Whisper
