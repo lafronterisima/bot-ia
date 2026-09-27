@@ -1,10 +1,16 @@
 FROM node:18-alpine
+
 WORKDIR /app
+
+# Copiar manifiestos e instalar dependencias
 COPY package*.json ./
-RUN npm install
+RUN npm install --production
+
+# Copiar el resto del código
 COPY . .
-# 1. Usar la variable PORT de la plataforma o 8080 por defecto
-ENV PORT=8080
-# 2. Exponer el puerto 8080
+
+# Puerto que escuchará la app
 EXPOSE 8080
-CMD ["npm", "start"]
+
+# Comando de inicio
+CMD ["node", "index.js"]
