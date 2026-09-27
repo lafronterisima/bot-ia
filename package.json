@@ -1,16 +1,19 @@
 {
-  "name": "bot-telegram-maya",
+  "name": "bot-ia-maya",
   "version": "1.0.0",
-  "description": "Bot de Telegram",
+  "description": "Bot de Telegram Maya con OpenAI y TTS",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
-    "dotenv": "^16.4.5",
-    "google-tts-api": "^0.2.2",
+    "axios": "^1.6.0",
+    "dotenv": "^16.4.0",
+    "google-tts-api": "^0.0.6",
     "node-telegram-bot-api": "^0.66.0",
-    "openai": "^4.52.0"
+    "openai": "^4.28.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
