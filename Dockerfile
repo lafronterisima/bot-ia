@@ -1,14 +1,14 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /workspace
 
-# Copiar archivos de manifiesto
+# Copiar manifiestos
 COPY package*.json ./
 
-# Instalar dependencias omitiendo opcionales y audit
-RUN npm install --omit=optional --no-audit --no-fund
+# Instalar paquetes directamente
+RUN npm install
 
-# Copiar el código fuente
+# Copiar el resto del código
 COPY . .
 
 EXPOSE 8080
