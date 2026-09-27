@@ -37,22 +37,37 @@ function obtenerHistorial(chatId) {
   if (historialChat[chatId].length > MAX_HISTORIAL_MENSAJES) {
     historialChat[chatId] = historialChat[chatId].slice(-MAX_HISTORIAL_MENSAJES);
   }
-  // Siempre antepone el SYSTEM_PROMPT sin destruir el historial previo
+  // Retorna el System Prompt seguido de la copia del historial actual
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
+// CORRECCIÓN CLAVE: Adaptación compatible con google-tts-api
 async function textoAVoz(texto, archivoDestino) {
-  const urls = googleTTS.getAllAudioUrls(texto, {
-    lang: 'es',
-    slow: false,
-    host: 'https://translate.google.com',
-  });
-  
-  const buffers = await Promise.all(
-    urls.map(item => axios.get(item.url, { responseType: 'arraybuffer' }).then(res => res.data))
-  );
-  
-  fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+  const getAudioUrl = googleTTS.getAudioUrl || (googleTTS.default && googleTTS.default.getAudioUrl);
+
+  if (typeof getAudioUrl === 'function') {
+    const url = getAudioUrl(texto, {
+      lang: 'es',
+      slow: false,
+      host: 'https://translate.google.com',
+    });
+
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    fs.writeFileSync(archivoDestino, Buffer.from(response.data));
+  } else {
+    const getAllUrls = googleTTS.getAllAudioUrls || googleTTS;
+    const urls = getAllUrls(texto, {
+      lang: 'es',
+      slow: false,
+      host: 'https://translate.google.com',
+    });
+
+    const buffers = await Promise.all(
+      urls.map(item => axios.get(item.url || item, { responseType: 'arraybuffer' }).then(res => res.data))
+    );
+
+    fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+  }
 }
 
 // 1. Comando /start
@@ -67,19 +82,21 @@ bot.on('text', async (msg) => {
   if (msg.text.startsWith('/')) return;
 
   const chatId = msg.chat.id;
-  const historial = obtenerHistorial(chatId);
-  historial.push({ role: "user", content: msg.text });
+  const historialCompleto = obtenerHistorial(chatId);
+  
+  // Agregar el mensaje actual del usuario al contexto que irá a OpenAI
+  const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: msg.text }];
 
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: historial,
+      messages: mensajesParaOpenAI,
       max_tokens: 200
     });
 
     const respuestaTexto = completion.choices[0].message.content;
-    
-    // Guardar en el historial en memoria
+
+    // Guardar permanentemente en el historial de memoria
     if (!historialChat[chatId]) historialChat[chatId] = [];
     historialChat[chatId].push({ role: "user", content: msg.text });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
@@ -104,7 +121,7 @@ bot.on('voice', async (msg) => {
 
     const fileUrl = await bot.getFileLink(msg.voice.file_id);
     const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
-    
+
     await pipeline(response.data, fs.createWriteStream(tempOgg));
 
     const transcription = await openai.audio.transcriptions.create({
@@ -118,17 +135,18 @@ bot.on('voice', async (msg) => {
       return bot.sendMessage(chatId, "No logré escuchar nada en la nota de voz 😅");
     }
 
-    const historial = obtenerHistorial(chatId);
-    historial.push({ role: "user", content: textoUsuario });
+    const historialCompleto = obtenerHistorial(chatId);
+    const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: textoUsuario }];
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: historial,
+      messages: mensajesParaOpenAI,
       max_tokens: 150
     });
 
     const respuestaTexto = completion.choices[0].message.content;
 
+    // Guardar en el historial en memoria
     if (!historialChat[chatId]) historialChat[chatId] = [];
     historialChat[chatId].push({ role: "user", content: textoUsuario });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
@@ -158,7 +176,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log("🤖 Maya está lista para recibir mensajes en Telegram...");
 });
 
-// Manejo de cierres y errores globales para evitar que la app se caiga silenciosamente
+// Manejo de cierres y errores globales
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
