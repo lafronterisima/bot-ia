@@ -2,7 +2,6 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { pipeline } = require('stream/promises');
 const axios = require('axios');
 const TelegramBot = require('node-telegram-bot-api');
 const { OpenAI } = require('openai');
@@ -41,7 +40,7 @@ function obtenerHistorial(chatId) {
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
-// NUEVA FUNCIÓN textoAVoz CON INDICACIONES INTEGRADAS
+// FUNCIÓN textoAVoz ROBUSTA Y CORREGIDA
 async function textoAVoz(texto, archivoDestino) {
   // 1. Limpieza y validación del texto recibido
   const textoLimpio = String(texto || '').trim();
@@ -111,7 +110,7 @@ bot.on('text', async (msg) => {
   }
 });
 
-// 3. Notas de Voz
+// 3. Notas de Voz (Corregido el flujo de descarga de audio stream)
 bot.on('voice', async (msg) => {
   const chatId = msg.chat.id;
   const timeStamp = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -121,11 +120,19 @@ bot.on('voice', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'record_voice');
 
+    // 1. Obtener enlace y guardar stream completo a archivo
     const fileUrl = await bot.getFileLink(msg.voice.file_id);
     const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
 
-    await pipeline(response.data, fs.createWriteStream(tempOgg));
+    const writer = fs.createWriteStream(tempOgg);
+    response.data.pipe(writer);
 
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+
+    // 2. Transcribir el audio usando Whisper
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempOgg),
       model: "whisper-1",
@@ -133,10 +140,11 @@ bot.on('voice', async (msg) => {
     });
 
     const textoUsuario = transcription.text;
-    if (!textoUsuario.trim()) {
+    if (!textoUsuario || !textoUsuario.trim()) {
       return bot.sendMessage(chatId, "No logré escuchar nada en la nota de voz 😅");
     }
 
+    // 3. Generar la respuesta de la IA
     const historialCompleto = obtenerHistorial(chatId);
     const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: textoUsuario }];
 
@@ -153,11 +161,15 @@ bot.on('voice', async (msg) => {
     historialChat[chatId].push({ role: "user", content: textoUsuario });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
+    // 4. Convertir la respuesta a voz y enviar por Telegram
     await textoAVoz(respuestaTexto, tempMp3);
     await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
 
   } catch (err) {
-    console.error("Error procesando nota de voz:", err);
+    console.error("❌ Error procesando nota de voz:", err.message || err);
+    if (err.response) {
+      console.error("Detalles de respuesta:", err.response.data);
+    }
     bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
   } finally {
     // Limpieza segura de archivos temporales
@@ -170,7 +182,7 @@ bot.on('voice', async (msg) => {
   }
 });
 
-// --- Servidor HTTP para Health Checks de Northflank ---
+// --- Servidor HTTP para Health Checks de Northflank / Heroku / Render ---
 const PORT = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
