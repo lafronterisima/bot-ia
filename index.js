@@ -1,4 +1,4 @@
-require('dotenv').config(); // Lee directamente el archivo .env de la raíz
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -8,7 +8,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { OpenAI } = require('openai');
 const googleTTS = require('google-tts-api');
 
-// Configuración de APIs
+// Inicialización de APIs
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -24,7 +24,6 @@ const SYSTEM_PROMPT = {
            "Mantén las respuestas cortas y directas (máximo 2 a 3 frases)."
 };
 
-// Mantenimiento de memoria del historial
 function obtenerHistorial(chatId) {
   if (!historialChat[chatId]) {
     historialChat[chatId] = [SYSTEM_PROMPT];
@@ -38,7 +37,6 @@ function obtenerHistorial(chatId) {
   return historialChat[chatId];
 }
 
-// Generar audio MP3 unificando buffers
 async function textoAVoz(texto, archivoDestino) {
   const urls = googleTTS.getAllAudioUrls(texto, {
     lang: 'es',
@@ -137,7 +135,7 @@ bot.on('voice', async (msg) => {
   }
 });
 
-// --- SERVIDOR HTTP PARA HEALTH CHECKS ---
+// --- Servidor HTTP para Health Checks en la nube ---
 const PORT = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
@@ -146,7 +144,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🤖 Servidor HTTP de salud escuchando en el puerto ${PORT}`);
+  console.log(`🤖 Servidor HTTP escuchando en el puerto ${PORT}`);
 });
 
 console.log("🤖 Amiga Virtual activa en Telegram...");
