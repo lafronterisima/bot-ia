@@ -1,7 +1,6 @@
 {
   "name": "bot-telegram-maya",
   "version": "1.0.0",
-  "description": "Bot de Telegram Maya",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,8 +11,5 @@
     "google-tts-api": "^0.2.2",
     "node-telegram-bot-api": "^0.66.0",
     "openai": "^4.52.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
