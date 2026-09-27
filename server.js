@@ -41,33 +41,35 @@ function obtenerHistorial(chatId) {
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
-// CORRECCIÓN CLAVE: Adaptación compatible con google-tts-api
+// NUEVA FUNCIÓN textoAVoz CON INDICACIONES INTEGRADAS
 async function textoAVoz(texto, archivoDestino) {
-  const getAudioUrl = googleTTS.getAudioUrl || (googleTTS.default && googleTTS.default.getAudioUrl);
+  // 1. Limpieza y validación del texto recibido
+  const textoLimpio = String(texto || '').trim();
+  if (!textoLimpio) throw new Error("El texto introducido para TTS está vacío.");
 
-  if (typeof getAudioUrl === 'function') {
-    const url = getAudioUrl(texto, {
-      lang: 'es',
-      slow: false,
-      host: 'https://translate.google.com',
-    });
+  // 2. Obtención segura de las URLs divididas
+  const urls = googleTTS.getAllAudioUrls(textoLimpio, {
+    lang: 'es',
+    slow: false,
+    host: 'https://translate.google.com',
+    timeout: 10000,
+  });
 
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    fs.writeFileSync(archivoDestino, Buffer.from(response.data));
-  } else {
-    const getAllUrls = googleTTS.getAllAudioUrls || googleTTS;
-    const urls = getAllUrls(texto, {
-      lang: 'es',
-      slow: false,
-      host: 'https://translate.google.com',
-    });
-
-    const buffers = await Promise.all(
-      urls.map(item => axios.get(item.url || item, { responseType: 'arraybuffer' }).then(res => res.data))
-    );
-
-    fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
+  if (!Array.isArray(urls) || urls.length === 0) {
+    throw new Error("No se pudieron generar los fragmentos de audio con google-tts-api.");
   }
+
+  // 3. Descarga de los buffers en paralelo
+  const buffers = await Promise.all(
+    urls.map(async (item) => {
+      const targetUrl = typeof item === 'string' ? item : item.url;
+      const res = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+      return res.data;
+    })
+  );
+
+  // 4. Escritura en disco
+  fs.writeFileSync(archivoDestino, Buffer.concat(buffers));
 }
 
 // 1. Comando /start
@@ -158,8 +160,13 @@ bot.on('voice', async (msg) => {
     console.error("Error procesando nota de voz:", err);
     bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
   } finally {
-    if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
-    if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
+    // Limpieza segura de archivos temporales
+    try {
+      if (fs.existsSync(tempOgg)) fs.unlinkSync(tempOgg);
+      if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
+    } catch (cleanupError) {
+      console.error("Error al eliminar archivos temporales:", cleanupError.message);
+    }
   }
 });
 
