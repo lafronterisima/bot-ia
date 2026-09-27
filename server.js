@@ -32,15 +32,13 @@ const SYSTEM_PROMPT = {
 
 function obtenerHistorial(chatId) {
   if (!historialChat[chatId]) {
-    historialChat[chatId] = [SYSTEM_PROMPT];
+    historialChat[chatId] = [];
   }
   if (historialChat[chatId].length > MAX_HISTORIAL_MENSAJES) {
-    historialChat[chatId] = [
-      SYSTEM_PROMPT,
-      ...historialChat[chatId].slice(-MAX_HISTORIAL_MENSAJES)
-    ];
+    historialChat[chatId] = historialChat[chatId].slice(-MAX_HISTORIAL_MENSAJES);
   }
-  return historialChat[chatId];
+  // Siempre antepone el SYSTEM_PROMPT sin destruir el historial previo
+  return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
 async function textoAVoz(texto, archivoDestino) {
@@ -60,7 +58,7 @@ async function textoAVoz(texto, archivoDestino) {
 // 1. Comando /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  historialChat[chatId] = [SYSTEM_PROMPT];
+  historialChat[chatId] = [];
   bot.sendMessage(chatId, "¡Hola! 👋 Soy Maya, tu nueva amiga virtual. ¿Cómo estás hoy? ¡Cuéntame de ti!");
 });
 
@@ -80,7 +78,11 @@ bot.on('text', async (msg) => {
     });
 
     const respuestaTexto = completion.choices[0].message.content;
-    historial.push({ role: "assistant", content: respuestaTexto });
+    
+    // Guardar en el historial en memoria
+    if (!historialChat[chatId]) historialChat[chatId] = [];
+    historialChat[chatId].push({ role: "user", content: msg.text });
+    historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
     await bot.sendMessage(chatId, respuestaTexto);
 
@@ -93,8 +95,6 @@ bot.on('text', async (msg) => {
 // 3. Notas de Voz
 bot.on('voice', async (msg) => {
   const chatId = msg.chat.id;
-  const historial = obtenerHistorial(chatId);
-
   const timeStamp = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const tempOgg = path.join(__dirname, `voice_${timeStamp}.ogg`);
   const tempMp3 = path.join(__dirname, `res_${timeStamp}.mp3`);
@@ -118,6 +118,7 @@ bot.on('voice', async (msg) => {
       return bot.sendMessage(chatId, "No logré escuchar nada en la nota de voz 😅");
     }
 
+    const historial = obtenerHistorial(chatId);
     historial.push({ role: "user", content: textoUsuario });
 
     const completion = await openai.chat.completions.create({
@@ -127,7 +128,10 @@ bot.on('voice', async (msg) => {
     });
 
     const respuestaTexto = completion.choices[0].message.content;
-    historial.push({ role: "assistant", content: respuestaTexto });
+
+    if (!historialChat[chatId]) historialChat[chatId] = [];
+    historialChat[chatId].push({ role: "user", content: textoUsuario });
+    historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
     await textoAVoz(respuestaTexto, tempMp3);
     await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
@@ -141,7 +145,7 @@ bot.on('voice', async (msg) => {
   }
 });
 
-// --- Servidor HTTP para Health Checks de Northflank / Nube ---
+// --- Servidor HTTP para Health Checks de Northflank ---
 const PORT = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
@@ -154,7 +158,11 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log("🤖 Maya está lista para recibir mensajes en Telegram...");
 });
 
-// Cierre limpio de procesos al reiniciar en el servidor
+// Manejo de cierres y errores globales para evitar que la app se caiga silenciosamente
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 process.on('SIGTERM', () => {
   console.log('Recibida señal SIGTERM, cerrando servidor...');
   server.close(() => {
