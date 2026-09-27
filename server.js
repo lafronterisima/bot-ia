@@ -40,7 +40,7 @@ function obtenerHistorial(chatId) {
   return [SYSTEM_PROMPT, ...historialChat[chatId]];
 }
 
-// FUNCIÓN textoAVoz ROBUSTA Y CORREGIDA
+// FUNCIÓN textoAVoz CON INDICACIONES INTEGRADAS
 async function textoAVoz(texto, archivoDestino) {
   // 1. Limpieza y validación del texto recibido
   const textoLimpio = String(texto || '').trim();
@@ -110,7 +110,7 @@ bot.on('text', async (msg) => {
   }
 });
 
-// 3. Notas de Voz (Corregido el flujo de descarga de audio stream)
+// 3. Notas de Voz
 bot.on('voice', async (msg) => {
   const chatId = msg.chat.id;
   const timeStamp = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -120,7 +120,7 @@ bot.on('voice', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'record_voice');
 
-    // 1. Obtener enlace y guardar stream completo a archivo
+    // 1. Descargar audio de Telegram asegurando que se complete la escritura
     const fileUrl = await bot.getFileLink(msg.voice.file_id);
     const response = await axios({ url: fileUrl, method: 'GET', responseType: 'stream' });
 
@@ -132,7 +132,7 @@ bot.on('voice', async (msg) => {
       writer.on('error', reject);
     });
 
-    // 2. Transcribir el audio usando Whisper
+    // 2. Transcribir audio con OpenAI Whisper
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempOgg),
       model: "whisper-1",
@@ -144,7 +144,7 @@ bot.on('voice', async (msg) => {
       return bot.sendMessage(chatId, "No logré escuchar nada en la nota de voz 😅");
     }
 
-    // 3. Generar la respuesta de la IA
+    // 3. Generar respuesta de texto con ChatGPT
     const historialCompleto = obtenerHistorial(chatId);
     const mensajesParaOpenAI = [...historialCompleto, { role: "user", content: textoUsuario }];
 
@@ -156,19 +156,19 @@ bot.on('voice', async (msg) => {
 
     const respuestaTexto = completion.choices[0].message.content;
 
-    // Guardar en el historial en memoria
+    // Guardar conversación en el historial
     if (!historialChat[chatId]) historialChat[chatId] = [];
     historialChat[chatId].push({ role: "user", content: textoUsuario });
     historialChat[chatId].push({ role: "assistant", content: respuestaTexto });
 
-    // 4. Convertir la respuesta a voz y enviar por Telegram
+    // 4. Convertir texto a voz y enviar por Telegram
     await textoAVoz(respuestaTexto, tempMp3);
     await bot.sendVoice(chatId, tempMp3, { caption: `🎙️ Maya: "${respuestaTexto}"` });
 
   } catch (err) {
     console.error("❌ Error procesando nota de voz:", err.message || err);
     if (err.response) {
-      console.error("Detalles de respuesta:", err.response.data);
+      console.error("Detalles de la respuesta de error:", err.response.data);
     }
     bot.sendMessage(chatId, "No alcancé a escucharte bien, ¿me hablas de nuevo?");
   } finally {
