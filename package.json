@@ -1,6 +1,7 @@
 {
   "name": "bot-telegram-maya",
   "version": "1.0.0",
+  "description": "Bot de Telegram",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
