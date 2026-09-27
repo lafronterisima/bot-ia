@@ -14,4 +14,4 @@ COPY . .
 EXPOSE 8080
 
 # 4. Iniciar tu archivo principal real (index.js)
-CMD ["node", "server.js"]
+CMD ["node", "index.js"]
