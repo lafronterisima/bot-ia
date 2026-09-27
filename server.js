@@ -8,6 +8,12 @@ const TelegramBot = require('node-telegram-bot-api');
 const { OpenAI } = require('openai');
 const googleTTS = require('google-tts-api');
 
+// Validar variables de entorno esenciales antes de iniciar
+if (!process.env.TELEGRAM_TOKEN || !process.env.OPENAI_API_KEY) {
+  console.error("❌ ERROR CRÍTICO: Faltan variables de entorno (TELEGRAM_TOKEN o OPENAI_API_KEY).");
+  process.exit(1);
+}
+
 // Inicialización de APIs
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -135,16 +141,23 @@ bot.on('voice', async (msg) => {
   }
 });
 
-// --- Servidor HTTP para Health Checks en la nube ---
+// --- Servidor HTTP para Health Checks de Northflank / Nube ---
 const PORT = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Bot de Telegram Maya está activo y saludable 🚀\n');
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🤖 Servidor HTTP escuchando en el puerto ${PORT}`);
+  console.log(`🤖 Servidor HTTP de Health Check escuchando en el puerto ${PORT}`);
+  console.log("🤖 Maya está lista para recibir mensajes en Telegram...");
 });
 
-console.log("🤖 Amiga Virtual activa en Telegram...");
+// Cierre limpio de procesos al reiniciar en el servidor
+process.on('SIGTERM', () => {
+  console.log('Recibida señal SIGTERM, cerrando servidor...');
+  server.close(() => {
+    process.exit(0);
+  });
+});
