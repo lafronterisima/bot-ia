@@ -5,8 +5,7 @@ WORKDIR /workspace
 # Copiar manifiestos
 COPY package*.json ./
 
-# Instalar paquetes directamente
-RUN npm install
+
 
 # Copiar el resto del código
 COPY . .
