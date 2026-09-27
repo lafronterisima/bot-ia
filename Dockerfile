@@ -8,7 +8,7 @@ COPY package*.json ./
 # Instalar paquetes requeridos
 RUN npm install
 
-# Copiar el resto del código (incluyendo la carpeta Api si existe)
+# Copiar el resto del código
 COPY . .
 
 EXPOSE 8080
