@@ -2,15 +2,15 @@ FROM node:20-alpine
 
 WORKDIR /workspace
 
-# Copiar únicamente manifiestos
+# Copiar archivos de manifiesto
 COPY package*.json ./
 
-# Instalar dependencias omitiendo paquetes opcionales
-RUN npm install 
+# Instalar dependencias omitiendo opcionales y audit
+RUN npm install --omit=optional --no-audit --no-fund
 
-# Copiar el resto de archivos de la aplicación
+# Copiar el código fuente
 COPY . .
 
 EXPOSE 8080
 
-CMD ["node", "server.js"]
+CMD ["node", "index.js"]
