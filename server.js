@@ -40,32 +40,24 @@ function obtenerHistorial(chatId) {
 }
 
 // FUNCIÓN DE TEXTO A VOZ ROBUSTA (Con Fallback a OpenAI TTS)
+// FUNCIÓN DE TEXTO A VOZ ROBUSTA (Con Fallback a OpenAI TTS)
 async function textoAVoz(texto, archivoDestino) {
   const textoLimpio = String(texto || '').trim();
   if (!textoLimpio) throw new Error("El texto introducido para TTS está vacío.");
 
   try {
-    // Intento 1: Usar google-tts-api formateando correctamente la respuesta
-    const urlsResult = googleTTS.getAllAudioUrls(textoLimpio, {
+    // Intento 1: Google TTS con firma de parámetros limpia
+    const urlList = googleTTS.getAllAudioUrls(textoLimpio, {
       lang: 'es',
       slow: false,
       host: 'https://translate.google.com',
-      timeout: 10000,
+      splitPunct: ',.?!'
     });
 
-    // Asegurar que urlsResult sea siempre un Array de cadenas de texto (URLs)
-    let urlList = [];
-    if (Array.isArray(urlsResult)) {
-      urlList = urlsResult.map(item => (typeof item === 'string' ? item : item.url));
-    } else if (typeof urlsResult === 'string') {
-      urlList = [urlsResult];
-    } else if (urlsResult && urlsResult.url) {
-      urlList = [urlsResult.url];
-    }
-
-    if (urlList.length > 0) {
+    if (Array.isArray(urlList) && urlList.length > 0) {
       const buffers = await Promise.all(
-        urlList.map(async (targetUrl) => {
+        urlList.map(async (item) => {
+          const targetUrl = typeof item === 'string' ? item : item.url;
           const res = await axios.get(targetUrl, { responseType: 'arraybuffer' });
           return res.data;
         })
